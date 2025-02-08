@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Record & Transcribe</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        .container { max-width: 700px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+        button { padding: 10px 20px; font-size: 16px; margin-top: 20px; }
+        .recording { color: red; font-weight: bold; }
+        .flashcard { margin-top: 10px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; text-align: left; }
+        input[type="file"] { margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Record & Transcribe Audio</h1>
+
+        <h3>Upload File (PDF/TXT):</h3>
+        <input type="file" id="fileInput" accept=".txt, .pdf">
+        
+        <h3>Text:</h3>
+        <textarea id="textInput" rows="10" cols="80" placeholder="Type or paste text here..."></textarea>
+
+        <br>
+        <button id="recordBtn">🎤 Start Recording</button>
+        <p id="status"></p>
+
+        <h3>Transcription:</h3>
+        <p id="transcription"></p>
+
+        <h3>Generated Flashcards:</h3>
+        <div id="flashcards"></div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        const recordBtn = document.getElementById("recordBtn");
+        const statusText = document.getElementById("status");
+        const transcriptionText = document.getElementById("transcription");
+        const flashcardsDiv = document.getElementById("flashcards");
+        const fileInput = document.getElementById("fileInput");
+        const textInput = document.getElementById("textInput");
+
+        recordBtn.addEventListener("click", async () => {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        });
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+                    await sendAudioToServer(audioBlob);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                recordBtn.textContent = "⏹ Stop Recording";
+                statusText.textContent = "Recording...";
+                statusText.classList.add("recording");
+            } catch (error) {
+                console.error("Error accessing microphone:", error);
+            }
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            isRecording = false;
+            recordBtn.textContent = "🎤 Start Recording";
+            statusText.textContent = "Processing...";
+            statusText.classList.remove("recording");
+        }
+
+        async function sendAudioToServer(audioBlob) {
+            const formData = new FormData();
+            formData.append("audio", audioBlob, "recorded_audio.wav");
+            formData.append("text", textInput.value); // Send user-inputted or extracted text
+
+            try {
+                const response = await fetch("/upload_audio", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                const data = await response.json();
+                if (data.transcription) {
+                    transcriptionText.textContent = data.transcription;
+                    statusText.textContent = "Transcription complete!";
+                }
+
+                if (data.flashcards) {
+                    flashcardsDiv.innerHTML = "";
+                    data.flashcards.forEach(fc => {
+                        const flashcard = document.createElement("div");
+                        flashcard.className = "flashcard";
+                        flashcard.innerHTML = `<strong>Q:</strong> ${fc.question}<br><strong>A:</strong> ${fc.answer}`;
+                        flashcardsDiv.appendChild(flashcard);
+                    });
+                }
+            } catch (error) {
+                console.error("Error uploading audio:", error);
+                statusText.textContent = "Upload failed.";
+            }
+        }
+
+        // Handle file upload (PDF/TXT)
+        fileInput.addEventListener("change", async function (event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            if (file.type === "text/plain") {
+                // Handle TXT file
+                reader.onload = function () {
+                    textInput.value = reader.result;
+                };
+                reader.readAsText(file);
+            } else if (file.type === "application/pdf") {
+                // Handle PDF file
+                const pdfData = await file.arrayBuffer();
+                const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.mjs");
+                
+                const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+                let extractedText = "";
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    extractedText += textContent.items.map(item => item.str).join(" ") + "\n\n";
+                }
+                textInput.value = extractedText.trim();
+            } else {
+                alert("Unsupported file type. Please upload a .txt or .pdf file.");
+            }
+        });
+    </script>
+</body>
+</html>
